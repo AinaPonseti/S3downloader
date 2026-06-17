@@ -26,7 +26,7 @@ S5CMD_BIN = os.path.join(APP_DIR, "s5cmd.exe" if platform.system() == "Windows" 
 
 # Batch UI updates instead of scheduling a Tk callback per downloaded file.
 UI_FLUSH_INTERVAL_MS = 150
-
+CREATE_NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0
 
 def decrypt_payload(encrypted_obj, passphrase):
     salt = base64.b64decode(encrypted_obj["salt"])
@@ -131,7 +131,8 @@ def list_bucket_keys(bucket_path, profile):
     cmd = [S5CMD_BIN, "--profile", profile, "ls", f"s3://{bucket_path}/*"]
     env_vars = os.environ.copy()
     env_vars["AWS_SHARED_CREDENTIALS_FILE"] = CREDENTIALS_FILE
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env_vars)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env_vars,
+                         creationflags=CREATE_NO_WINDOW)
 
     counts = {}
     for line in result.stdout.splitlines():
@@ -469,6 +470,7 @@ class App(tk.Tk):
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, env=env_vars, universal_newlines=True,
+            creationflags=CREATE_NO_WINDOW,
         )
 
         error_keys = set()

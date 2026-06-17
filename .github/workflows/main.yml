@@ -1,0 +1,25 @@
+name: Build executables
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --windowed --name s3-downloader s3_downloader.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: s3-downloader-${{ matrix.os }}
+          path: dist/*

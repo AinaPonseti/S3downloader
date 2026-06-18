@@ -4,11 +4,17 @@ A desktop application for downloading large sets of files from Neurophindr's S3 
 
 Built with Python, Tkinter, and [s5cmd](https://github.com/peak/s5cmd) (downloaded automatically on first run).
 
-## For end users
+## Installation
 
 ### 1. Install the application
 
 Download the latest build for your operating system from the [Releases page](https://github.com/AinaPonseti/S3downloader/releases), or get it from the link provided in the web app. No other setup is required — the app will download its own copy of `s5cmd` the first time it runs.
+
+> **Note:** these builds aren't currently code-signed, so your OS will show a security warning the first time you open the app. This doesn't mean anything is wrong — see below for how to proceed.
+>
+> **On macOS:** you'll see "[app name] can't be opened because it is from an unidentified developer" (or it may say the app is damaged). Right-click (or Control-click) the app and choose **Open**, then confirm **Open** in the dialog that follows. You only need to do this once — after that, double-clicking works normally. If macOS reports the app as "damaged," instead run this once in Terminal before opening it: `xattr -cr /path/to/s3-downloader.app`.
+>
+> **On Windows:** SmartScreen will show "Windows protected your PC." Click **More info**, then **Run anyway**. This warning appears for any unsigned executable regardless of how trustworthy it is, and will keep appearing on each new release until the app is code-signed.
 
 ### 2. Get your credentials file
 
@@ -74,18 +80,25 @@ python s3_downloader.py
 
 ### Building executables
 
-Executables for Windows, macOS, and Linux are built via GitHub Actions (`.github/workflows/build.yml`) using PyInstaller, triggered on version tags (`v*`) or manually via `workflow_dispatch`. Each platform produces a single-file, windowed binary uploaded as a workflow artifact.
+Executables for Windows, macOS, and Linux are built via GitHub Actions (`.github/workflows/main.yml`) using PyInstaller, triggered on version tags (`v*`) or manually via `workflow_dispatch`. The matrix uses `fail-fast: false` so one OS failing doesn't cancel the others. macOS builds use `--onedir` (PyInstaller's `--onefile` is incompatible with `--windowed` `.app` bundles on macOS); Windows and Linux use `--onefile`. Each platform's output is uploaded as a workflow artifact.
 
 To build locally:
 
 ```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name s3-downloader s3_downloader.py
+pip install pyinstaller cryptography
+pyinstaller --onefile --windowed --name s3-downloader s3_downloader.py   # Windows/Linux
+pyinstaller --onedir --windowed --name s3-downloader s3_downloader.py    # macOS
 ```
 
-The output binary will be in `dist/`.
+The output will be in `dist/`. On macOS this is a `.app` bundle (a folder, not a single file) — zip it before attaching to a GitHub Release, since release assets must be single files:
+
+```bash
+cd dist && zip -r s3-downloader-macos.zip s3-downloader.app
+```
 
 > **Note (Linux):** `--windowed` still requires a display server (X11/Wayland) at runtime since the app uses Tkinter. A binary built on a headless CI runner will build successfully but won't run on a headless machine.
+
+> **Note (code signing):** none of the released builds are currently code-signed or notarized, which is why users see OS security warnings on first launch (see [Troubleshooting](#troubleshooting) above). Signing requires a paid Apple Developer account (macOS, plus notarization) and a code signing certificate, ideally EV, for reliable SmartScreen reputation (Windows). If this project moves beyond internal/small-team use, revisit this.
 
 ### Security notes
 

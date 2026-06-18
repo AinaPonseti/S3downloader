@@ -25,7 +25,17 @@ jobs:
       - run: pyinstaller --onefile --windowed --name s3-downloader s3_downloader.py
         if: matrix.os != 'macos-latest'
         shell: bash
+      - name: Package macOS app
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            s3-downloader.app \
+            s3-downloader-macos.zip
       - uses: actions/upload-artifact@v4
         with:
           name: s3-downloader-${{ matrix.os }}
-          path: dist/*
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/s3-downloader

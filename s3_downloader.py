@@ -28,6 +28,7 @@ S5CMD_BIN = os.path.join(APP_DIR, "s5cmd.exe" if platform.system() == "Windows" 
 UI_FLUSH_INTERVAL_MS = 150
 CREATE_NO_WINDOW = 0x08000000 if platform.system() == "Windows" else 0
 
+
 def decrypt_payload(encrypted_obj, passphrase):
     salt = base64.b64decode(encrypted_obj["salt"])
     iv = base64.b64decode(encrypted_obj["iv"])
@@ -93,6 +94,7 @@ def load_credentials_file(json_path):
         data = decrypt_payload(raw, DECRYPTION_PASSPHRASE)
     else:
         data = raw
+
     required = ["environment", "region", "profile", "project", "config_file_info", "expiration"]
     missing = [k for k in required if k not in data]
     if missing:
@@ -132,7 +134,7 @@ def list_bucket_keys(bucket_path, profile):
     env_vars = os.environ.copy()
     env_vars["AWS_SHARED_CREDENTIALS_FILE"] = CREDENTIALS_FILE
     result = subprocess.run(cmd, capture_output=True, text=True, env=env_vars,
-                         creationflags=CREATE_NO_WINDOW)
+                             creationflags=CREATE_NO_WINDOW)
 
     counts = {}
     for line in result.stdout.splitlines():
@@ -183,9 +185,10 @@ class App(tk.Tk):
 
         pad = {"padx": 10, "pady": 5}
 
-        self.select_filebtn = tk.Button(self, text="Select downloaded file (.json)",
-                  command=self.pick_config_file, bg="#B6D6F0", fg="black", width=40
-                  )
+        self.select_filebtn = tk.Button(
+            self, text="Select downloaded file (.json)",
+            command=self.pick_config_file, bg="#B6D6F0", fg="black", width=40
+        )
         self.select_filebtn.grid(row=0, column=0, columnspan=2, padx=10, pady=10, sticky="we")
 
         self.create_label("Region AWS:", 1, "region", pad)
@@ -224,17 +227,26 @@ class App(tk.Tk):
         self.tree.heading("#0", text="File")
         self.tree.heading("status", text="Status")
         self.tree.column("#0", width=440)
-        self.tree.column("status", width=120, anchor="center")
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.column("status", width=140, anchor="center")
+
+        # Reposition embedded progressbars after any scroll action,
+        # whether triggered by the scrollbar itself or the mouse wheel.
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self._on_scrollbar_move)
         self.tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.bind("<MouseWheel>", lambda e: self.after(10, self.reposition_all_progressbars))
+        self.tree.bind("<Button-4>", lambda e: self.after(10, self.reposition_all_progressbars))
+        self.tree.bind("<Button-5>", lambda e: self.after(10, self.reposition_all_progressbars))
+
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
         self.tree.tag_configure("done", foreground="#16a34a")
         self.tree.tag_configure("pending", foreground="#888")
+        self.tree.tag_configure("downloading", foreground="#000000")
         self.tree.tag_configure("error", foreground="#dc2626")
 
         self._row_by_key = {}
+        self._progressbars = {}
 
         # --- UI update batching state ---
         # Instead of scheduling a Tk `after` callback for every single
@@ -246,8 +258,12 @@ class App(tk.Tk):
         self._pending_done = set()
         self._pending_error = {}
         self._pending_progress = None  # (done, total)
+        self._pending_group_progress = {}  # key -> (completed, total)
         self._flush_scheduled = False
 
+    # ------------------------------------------------------------------
+    # Layout helpers
+    # ------------------------------------------------------------------
     def create_label(self, text, row, attr_name, pad):
         tk.Label(self, text=text).grid(row=row, column=0, sticky="w", **pad)
         entry = tk.Entry(self, width=40, state="readonly")
@@ -290,28 +306,75 @@ class App(tk.Tk):
     def set_status(self, msg):
         self.status.config(text=msg)
 
+    # ------------------------------------------------------------------
+    # Tree + embedded progressbar management
+    # ------------------------------------------------------------------
     def reset_tree(self):
+        for pbar in self._progressbars.values():
+            pbar.destroy()
+        self._progressbars = {}
         self.tree.delete(*self.tree.get_children())
         self._row_by_key = {}
 
-    def add_file_row(self, key):
+    def add_file_row(self, key, total_files):
         row_id = self.tree.insert("", "end", text=key, values=("⏳ Pending",), tags=("pending",))
         self._row_by_key[key] = row_id
+        self._group_totals = getattr(self, "_group_totals", {})
+        self._group_totals[key] = total_files
+
+    def _on_scrollbar_move(self, *args):
+        self.tree.yview(*args)
+        self.reposition_all_progressbars()
+
+    def _place_progressbar(self, row_id):
+        pbar = self._progressbars.get(row_id)
+        if not pbar:
+            return
+        bbox = self.tree.bbox(row_id, column="status")
+        if not bbox:
+            pbar.place_forget()
+            return
+        x, y, width, height = bbox
+        pbar.place(x=x, y=y, width=width, height=height)
+
+    def reposition_all_progressbars(self):
+        for row_id in list(self._progressbars.keys()):
+            self._place_progressbar(row_id)
+
+    def _remove_progressbar(self, row_id):
+        pbar = self._progressbars.pop(row_id, None)
+        if pbar:
+            pbar.place_forget()
+            pbar.destroy()
 
     def mark_downloading(self, key):
         row_id = self._row_by_key.get(key)
+        if row_id and row_id not in self._progressbars:
+            total_files = self._group_totals.get(key, 1)
+            pbar = ttk.Progressbar(self.tree, length=100, mode="determinate", maximum=max(total_files, 1))
+            self._progressbars[row_id] = pbar
+            self._place_progressbar(row_id)
         if row_id:
-            self.tree.item(row_id, values=("Downloading...",), tags=("downloading",))
+            self.tree.item(row_id, values=("",), tags=("downloading",))
 
     def mark_done(self, key):
         row_id = self._row_by_key.get(key)
         if row_id:
+            self._remove_progressbar(row_id)
             self.tree.item(row_id, values=("✓ Completed",), tags=("done",))
 
     def mark_error(self, key, msg=""):
         row_id = self._row_by_key.get(key)
         if row_id:
+            self._remove_progressbar(row_id)
             self.tree.item(row_id, values=("✗ Error",), tags=("error",))
+
+    def update_group_progress(self, key, completed, total):
+        row_id = self._row_by_key.get(key)
+        pbar = self._progressbars.get(row_id)
+        if pbar:
+            pbar["maximum"] = max(total, 1)
+            pbar["value"] = completed
 
     def update_progress(self, done, total):
         pct = int((done / total) * 100) if total else 0
@@ -350,6 +413,11 @@ class App(tk.Tk):
             self._pending_progress = (done, total)
             self._schedule_flush_locked()
 
+    def queue_group_progress(self, key, completed, total):
+        with self._ui_lock:
+            self._pending_group_progress[key] = (completed, total)
+            self._schedule_flush_locked()
+
     def _schedule_flush_locked(self):
         # Caller already holds self._ui_lock.
         if not self._flush_scheduled:
@@ -362,13 +430,17 @@ class App(tk.Tk):
             done = self._pending_done
             errors = self._pending_error
             progress = self._pending_progress
+            group_progress = self._pending_group_progress
             self._pending_downloading = set()
             self._pending_done = set()
             self._pending_error = {}
             self._pending_progress = None
+            self._pending_group_progress = {}
             self._flush_scheduled = False
 
         last_row = None
+        for key, (completed, total) in group_progress.items():
+            self.update_group_progress(key, completed, total)
         for key in downloading:
             self.mark_downloading(key)
             last_row = self._row_by_key.get(key)
@@ -380,9 +452,13 @@ class App(tk.Tk):
             last_row = self._row_by_key.get(key)
         if last_row:
             self.tree.see(last_row)
+            self.reposition_all_progressbars()
         if progress:
             self.update_progress(*progress)
 
+    # ------------------------------------------------------------------
+    # Download flow
+    # ------------------------------------------------------------------
     def start(self):
         region = self.region.get().strip()
         profile = self.profile.get().strip()
@@ -397,7 +473,6 @@ class App(tk.Tk):
         self.start_btn.config(state="disabled")
         self.select_filebtn.config(state="disabled")
         self.dest_btn.config(state="disabled")
-
         self.dest.config(state="readonly")
 
         self.reset_tree()
@@ -419,15 +494,18 @@ class App(tk.Tk):
 
             self.after(0, lambda: (self.progress.config(mode="indeterminate"), self.progress.start(10)))
             self.set_status(f"Listing files from {len(buckets)} bucket(s)...")
-            
+
             keys_per_bucket = list_buckets_parallel(buckets, profile)
             self.after(0, lambda: (self.progress.stop(), self.progress.config(mode="determinate")))
 
             all_keys = {}
             for counts in keys_per_bucket:
                 all_keys.update(counts)
-            for k in all_keys:
-                self.add_file_row(k)
+
+            def populate_rows():
+                for k, total_k in all_keys.items():
+                    self.add_file_row(k, total_k)
+            self.after(0, populate_rows)
 
             total = sum(all_keys.values())
             done = 0
@@ -485,9 +563,10 @@ class App(tk.Tk):
                 if matched:
                     done += 1
                     completed_for_key[matched] += 1
+                    expected = keys.get(matched, float("inf"))
+                    self.queue_group_progress(matched, completed_for_key[matched], expected if expected != float("inf") else completed_for_key[matched])
                     self.queue_downloading(matched)
                     self.queue_progress(done, total)
-                    expected = keys.get(matched, float("inf"))
                     if completed_for_key[matched] >= expected and matched not in error_keys:
                         self.queue_done(matched)
             elif line.startswith("ERROR"):
@@ -517,16 +596,11 @@ class App(tk.Tk):
                 continue
             seen = completed_for_key[key]
             if seen == 0:
-                # Nothing reported for this key — assume s5cmd had nothing
-                # to do (already in sync / zero objects) and count it as
-                # fully done.
+                self.queue_group_progress(key, expected_count, expected_count)
                 self.queue_done(key)
                 done += expected_count
                 self.queue_progress(done, total)
             elif seen < expected_count:
-                # Partial completion with no error line seen: don't lie
-                # about completeness. Surface it instead of silently
-                # under-counting forever.
                 self.queue_error(key, f"Expected {expected_count} files, only saw {seen}")
 
         return done

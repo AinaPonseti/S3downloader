@@ -1,14 +1,13 @@
 name: Build executables
-
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
-
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
@@ -17,11 +16,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pyinstaller
+      - run: pip install pyinstaller cryptography
+      - run: rm -rf build dist *.spec
+        shell: bash
       - run: pyinstaller --onedir --windowed --name s3-downloader s3_downloader.py
         if: matrix.os == 'macos-latest'
+        shell: bash
       - run: pyinstaller --onefile --windowed --name s3-downloader s3_downloader.py
         if: matrix.os != 'macos-latest'
+        shell: bash
       - uses: actions/upload-artifact@v4
         with:
           name: s3-downloader-${{ matrix.os }}

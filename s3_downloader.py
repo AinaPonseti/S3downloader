@@ -260,10 +260,42 @@ class App(tk.Tk):
         self._pending_progress = None  # (done, total)
         self._pending_group_progress = {}  # key -> (completed, total)
         self._flush_scheduled = False
+        self._active_proc = None
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ------------------------------------------------------------------
     # Layout helpers
     # ------------------------------------------------------------------
+    def _on_close(self):
+        if self._active_proc and self._active_proc.poll() is None:
+            if not messagebox.askyesno(
+                "Download in progress",
+                "A download is still running. Closing now will stop it. Close anyway?",
+            ):
+                return
+            self._kill_active_proc()
+        self.destroy()
+
+    def _kill_active_proc(self):
+        proc = self._active_proc
+        if not proc or proc.poll() is not None:
+            return
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    creationflags=CREATE_NO_WINDOW,
+                )
+            else:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception:
+            pass
+
     def create_label(self, text, row, attr_name, pad):
         tk.Label(self, text=text).grid(row=row, column=0, sticky="w", **pad)
         entry = tk.Entry(self, width=40, state="readonly")
@@ -550,6 +582,7 @@ class App(tk.Tk):
             text=True, bufsize=1, env=env_vars, universal_newlines=True,
             creationflags=CREATE_NO_WINDOW,
         )
+        self._active_proc = proc
 
         error_keys = set()
         for line in proc.stdout:
@@ -579,6 +612,7 @@ class App(tk.Tk):
 
         proc.wait()
         proc.stdout.close()
+        self._active_proc = None
         os.remove(batch_path)
 
         if proc.returncode != 0:

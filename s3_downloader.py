@@ -569,9 +569,23 @@ class App(tk.Tk):
         self.create_label("Environment:", 3, "lbl_env",     pad)
         self.create_label("Project:",     4, "lbl_project", pad)
 
-        tk.Label(self, text="Destination:").grid(row=5, column=0, sticky="w", **pad)
+        # Bucket selection — both enabled by default; unchecking one skips
+        # that bucket entirely during download.
+        self.download_output_var   = tk.BooleanVar(value=True)
+        self.download_analysis_var = tk.BooleanVar(value=True)
+        bucket_frame = tk.Frame(self)
+        bucket_frame.grid(row=5, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        tk.Label(bucket_frame, text="Buckets:").pack(side="left", padx=(0, 8))
+        self.output_chk = ttk.Checkbutton(bucket_frame, text="Output",
+                                          variable=self.download_output_var)
+        self.output_chk.pack(side="left", padx=(0, 12))
+        self.analysis_chk = ttk.Checkbutton(bucket_frame, text="Analysis",
+                                            variable=self.download_analysis_var)
+        self.analysis_chk.pack(side="left")
+
+        tk.Label(self, text="Destination:").grid(row=6, column=0, sticky="w", **pad)
         dest_frame = tk.Frame(self)
-        dest_frame.grid(row=5, column=1, **pad)
+        dest_frame.grid(row=6, column=1, **pad)
         self.dest = tk.Entry(dest_frame, width=32)
         self.dest.insert(0, os.path.join(os.path.expanduser("~"), "Downloads", "s3-data"))
         self.dest.pack(side="left")
@@ -582,22 +596,22 @@ class App(tk.Tk):
             self, text="Download", command=self.start,
             bg="#627BC1", fg="white", width=20,
         )
-        self.start_btn.grid(row=6, column=0, columnspan=2, pady=15)
+        self.start_btn.grid(row=7, column=0, columnspan=2, pady=15)
 
 
         self.progress = ttk.Progressbar(self, length=600, mode="determinate")
-        self.progress.grid(row=7, column=0, columnspan=2, padx=10)
+        self.progress.grid(row=8, column=0, columnspan=2, padx=10)
 
         self.progress_label = tk.Label(self, text="0 / 0 Files (0%)", anchor="w")
-        self.progress_label.grid(row=8, column=0, columnspan=2, sticky="w", padx=10)
+        self.progress_label.grid(row=9, column=0, columnspan=2, sticky="w", padx=10)
 
         self.status_lbl = tk.Label(self, text="Ready.", anchor="w", fg="#444")
-        self.status_lbl.grid(row=9, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        self.status_lbl.grid(row=10, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
-        tk.Label(self, text="Files:").grid(row=10, column=0, sticky="w", padx=10)
+        tk.Label(self, text="Files:").grid(row=11, column=0, sticky="w", padx=10)
 
         tree_frame = tk.Frame(self)
-        tree_frame.grid(row=11, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
+        tree_frame.grid(row=12, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
 
         self.tree = ttk.Treeview(tree_frame, columns=("status",),
                                  show="tree headings", height=14)
@@ -733,7 +747,7 @@ class App(tk.Tk):
         self._group_totals[key] = total_files
         if local_count >= total_files:
             row_id = self.tree.insert("", "end", text=key,
-                                      values=("✓ Completed",), tags=("done",))
+                                      values=("✓ Already downloaded",), tags=("local",))
             self._row_by_key[key] = row_id
             return
         row_id = self.tree.insert("", "end", text=key,
@@ -922,6 +936,8 @@ class App(tk.Tk):
         self.select_filebtn.config(state="disabled")
         self.dest_btn.config(state="disabled")
         self.dest.config(state="readonly")
+        self.output_chk.config(state="disabled")
+        self.analysis_chk.config(state="disabled")
 
         self.reset_tree()
         self.update_progress(0, 0)
@@ -940,14 +956,28 @@ class App(tk.Tk):
         try:
             ensure_s5cmd(self.set_status)
 
-            buckets = [
-                f"neurophindr-analysis-{env}/{project}",
-                f"neurophindr-output-{env}/{project}",
+            # Build the full bucket/dest pairs, then keep only the ones
+            # whose checkbox is checked.
+            candidate_pairs = [
+                (f"neurophindr-analysis-{env}/{project}",
+                 os.path.join(dest, f"analysis-{env}"),
+                 self.download_analysis_var.get()),
+                (f"neurophindr-output-{env}/{project}",
+                 os.path.join(dest, f"output-{env}"),
+                 self.download_output_var.get()),
             ]
-            dests = [
-                os.path.join(dest, f"analysis-{env}"),
-                os.path.join(dest, f"output-{env}"),
-            ]
+            selected = [(b, d) for b, d, enabled in candidate_pairs if enabled]
+
+            if not selected:
+                self.set_status("No bucket selected.")
+                self.after(0, lambda: messagebox.showwarning(
+                    "Nothing to download",
+                    "Select at least one bucket (Output or Analysis) before downloading.",
+                ))
+                return
+
+            buckets = [b for b, _ in selected]
+            dests   = [d for _, d in selected]
 
             self.after(0, lambda: (
                 self.progress.config(mode="indeterminate"),
@@ -1013,6 +1043,8 @@ class App(tk.Tk):
             self.select_filebtn.config(state="normal")
             self.dest_btn.config(state="normal")
             self.dest.config(state="normal")
+            self.output_chk.config(state="normal")
+            self.analysis_chk.config(state="normal")
 
     def sync_bucket(self, bucket, local_dest, profile, region,
                     keys, done, total, project, local_counts):
